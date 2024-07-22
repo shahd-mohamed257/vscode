@@ -2,11 +2,16 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-import * as http from 'http';
-import { URL } from 'url';
-import * as fs from 'fs';
-import * as path from 'path';
+import type { ServerAuthorizationCodeResponse } from '@azure/msal-node';
 import { randomBytes } from 'crypto';
+import * as fs from 'fs';
+import * as http from 'http';
+import * as path from 'path';
+import { URL } from 'url';
+import { env, Uri } from 'vscode';
+import { redirectUrl } from '../common/constants';
+import { ILoopbackClientAndOpener } from '../common/loopbackClientAndOpener';
+import { root } from '../root';
 
 function sendFile(res: http.ServerResponse, filepath: string) {
 	fs.readFile(filepath, (err, body) => {
@@ -122,21 +127,15 @@ export class LoopbackAuthServer implements ILoopbackServer {
 						res.end();
 						break;
 					}
-					if (this.state !== state) {
-						res.writeHead(302, { location: `/?error=${encodeURIComponent('State does not match.')}` });
-						res.end();
-						deferred.reject(new Error('State does not match.'));
-						break;
-					}
 					if (this.nonce !== nonce) {
 						res.writeHead(302, { location: `/?error=${encodeURIComponent('Nonce does not match.')}` });
 						res.end();
 						deferred.reject(new Error('Nonce does not match.'));
 						break;
 					}
-					deferred.resolve({ code, state });
 					res.writeHead(302, { location: '/' });
 					res.end();
+					deferred.resolve({ code, state });
 					break;
 				}
 				// Serve the static files
@@ -203,5 +202,48 @@ export class LoopbackAuthServer implements ILoopbackServer {
 
 	public waitForOAuthResponse(): Promise<IOAuthResult> {
 		return this._resultPromise;
+	}
+}
+
+export class AuthServerLoopbackClientAndOpener implements ILoopbackClientAndOpener {
+	private _server?: LoopbackAuthServer;
+
+	constructor() { }
+
+	getRedirectUri(): string {
+		return redirectUrl;
+	}
+
+	async listenForAuthCode(successTemplate?: string, errorTemplate?: string): Promise<ServerAuthorizationCodeResponse> {
+		console.log(successTemplate, errorTemplate);
+		this._server = new LoopbackAuthServer(
+			path.join(root, '../media'),
+			// This value doesn't matter
+			'https://github.com'
+		);
+		await this._server.start();
+
+		if (!this._server) {
+			throw new Error('Server not started');
+		}
+		const result = await this._server.waitForOAuthResponse();
+		return {
+			code: result.code,
+			state: result.state,
+		};
+	}
+
+	async openBrowser(url: string): Promise<void> {
+		if (!this._server?.state) {
+			throw new Error('Server state not set');
+		}
+		const uri = Uri.parse(url + `&state=${encodeURI(this._server.state)}`);
+		await env.openExternal(uri);
+	}
+
+	closeServer(): void {
+		setTimeout(() => {
+			this._server?.stop();
+		}, 5000);
 	}
 }
