@@ -2,20 +2,15 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-import type { AccountInfo, AuthenticationResult, PublicClientApplication } from '@azure/msal-node';
-import { AuthenticationSession, Event } from 'vscode';
+import type { AccountInfo, AuthenticationResult, InteractiveRequest, SilentFlowRequest } from '@azure/msal-node';
+import type { Disposable, Event } from 'vscode';
 
-export interface IPublicClientApplicationCache {
-	getOrCreate(clientId: string, authority: string): PublicClientApplication;
-	getAll(): PublicClientApplication[];
-}
-
-
-
-export interface ICachedPublicClientApplication {
+export interface ICachedPublicClientApplication extends Disposable {
 	initialize(): Promise<void>;
+	acquireTokenSilent(request: SilentFlowRequest): Promise<AuthenticationResult>;
+	acquireTokenInteractive(request: InteractiveRequest): Promise<AuthenticationResult>;
+	removeAccount(account: AccountInfo): Promise<void>;
 	accounts: AccountInfo[];
-	pca: PublicClientApplication;
 	clientId: string;
 	authority: string;
 	onDidChange: Event<{ added: AccountInfo[]; deleted: AccountInfo[] }>;

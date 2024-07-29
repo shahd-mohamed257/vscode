@@ -2,14 +2,14 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-import { AccountInfo, AuthenticationResult, PublicClientApplication } from '@azure/msal-node';
-import { AuthenticationGetSessionOptions, AuthenticationProvider, AuthenticationProviderAuthenticationSessionsChangeEvent, AuthenticationSession, AuthenticationSessionAccountInformation, env, EventEmitter, LogOutputChannel, SecretStorage, Uri } from 'vscode';
+import { AccountInfo, AuthenticationResult } from '@azure/msal-node';
+import { AuthenticationGetSessionOptions, AuthenticationProvider, AuthenticationProviderAuthenticationSessionsChangeEvent, AuthenticationSession, AuthenticationSessionAccountInformation, env, EventEmitter, LogOutputChannel, Memento, SecretStorage, Uri } from 'vscode';
 import { Environment } from '@azure/ms-rest-azure-env';
-import { CachedPublicClientApplicationManager, PublicClientApplicationCache } from './publicClientCache';
-import { AuthServerLoopbackClientAndOpener } from './authServer';
+import { CachedPublicClientApplicationManager } from './publicClientCache';
 import { UriHandlerLoopbackClient } from '../common/loopbackClientAndOpener';
 import { UriEventHandler } from '../UriEventHandler';
 import { ICachedPublicClientApplication } from '../common/publicClientCache';
+import { AuthServerLoopbackClientAndOpener } from 'src/node/authServer';
 
 const redirectUri = 'https://vscode.dev/redirect';
 const DEFAULT_CLIENT_ID = 'aebc6443-996d-45c2-90f0-388ff96faa56';
@@ -21,14 +21,14 @@ export class MsalAuthProvider implements AuthenticationProvider {
 	onDidChangeSessions = this._onDidChangeSessionsEmitter.event;
 
 	private _publicClientManager: CachedPublicClientApplicationManager = new CachedPublicClientApplicationManager(
+		this._globalMemento,
 		this._secretStorage,
 		this._logger,
 		(e) => this._handleAccountChange(e)
 	);
 
-	// private _sessionIdToAccount = new Map<string, AuthenticationSessionAccountInformation>();
-
 	constructor(
+		private readonly _globalMemento: Memento,
 		private readonly _secretStorage: SecretStorage,
 		private readonly _disposables: { dispose(): void }[],
 		private readonly _logger: LogOutputChannel,
@@ -85,17 +85,17 @@ export class MsalAuthProvider implements AuthenticationProvider {
 
 		const cachedPca = await this.getOrCreatePublicClientApplication(clientId, tenant);
 
-		// const loopbackClient = new AuthServerLoopbackClientAndOpener();
+		const loopbackClient = new AuthServerLoopbackClientAndOpener();
 		let result: AuthenticationResult;
 		try {
-			result = await cachedPca.pca.acquireTokenInteractive({
+			result = await cachedPca.acquireTokenInteractive({
 				openBrowser: async (url) => { await env.openExternal(Uri.parse(url)); },
 				scopes: modifiedScopes,
-				// loopbackClient
+				loopbackClient
 			});
 		} catch (e) {
 			const loopbackClient = new UriHandlerLoopbackClient(this._uriHandler);
-			result = await cachedPca.pca.acquireTokenInteractive({
+			result = await cachedPca.acquireTokenInteractive({
 				openBrowser: (url) => loopbackClient.openBrowser(url),
 				scopes: modifiedScopes,
 				loopbackClient
@@ -103,7 +103,6 @@ export class MsalAuthProvider implements AuthenticationProvider {
 		}
 
 		const session = this.toAuthenticationSession(result, scopes);
-		// this._onDidChangeSessionsEmitter.fire({ added: [session], changed: [], removed: [] });
 		return session;
 	}
 
@@ -112,17 +111,10 @@ export class MsalAuthProvider implements AuthenticationProvider {
 			const accounts = cachedPca.accounts;
 			for (const account of accounts) {
 				if (account.homeAccountId === sessionId) {
-					console.log(`MYPREFIX PID:${process.pid} REMOVING...`);
-					await cachedPca.pca.getTokenCache().removeAccount(account);
-					console.log(`MYPREFIX PID:${process.pid} REMOVED...`);
-					// this._onDidChangeSessionsEmitter.fire({
-					// 	added: [], changed: [], removed: [{
-					// 		accessToken: 'unknown',
-					// 		account: { id: sessionId, label: account.username },
-					// 		id: sessionId,
-					// 		scopes: []
-					// 	}]
-					// });
+					this._logger.trace(`MYPREFIX PID:${process.pid} REMOVING...`);
+					this._globalMemento.update(`lastRemoval:${cachedPca.clientId}:${cachedPca.authority}`, new Date());
+					await cachedPca.removeAccount(account);
+					this._logger.trace(`MYPREFIX PID:${process.pid} REMOVED...`);
 					return;
 				}
 			}
@@ -159,27 +151,13 @@ export class MsalAuthProvider implements AuthenticationProvider {
 		const accounts = accountFilter
 			? cachedPca.accounts.filter(a => a.homeAccountId === accountFilter.id)
 			: cachedPca.accounts;
-		// const results = new Array<AuthenticationResult>();
 		const sessions: AuthenticationSession[] = [];
 		for (const account of accounts) {
-			console.log(`MYPREFIX PID:${process.pid} ACCOUNT:${account.username} ACQUIRING TOKEN...`);
-			const result = await cachedPca.pca.acquireTokenSilent({ account, scopes: scopesToSend, redirectUri });
-			console.log(`MYPREFIX PID:${process.pid} ACCOUNT:${account.username} ACQUIRED TOKEN...`);
+			this._logger.trace(`MYPREFIX PID:${process.pid} ACCOUNT:${account.username} ACQUIRING TOKEN...`);
+			const result = await cachedPca.acquireTokenSilent({ account, scopes: scopesToSend, redirectUri });
+			this._logger.trace(`MYPREFIX PID:${process.pid} ACCOUNT:${account.username} ACQUIRED TOKEN...`);
 			sessions.push(this.toAuthenticationSession(result, originalScopes));
 		}
-		// const results = await Promise.allSettled(accounts.map(async account => {
-		// 	console.log(`MYPREFIX PID:${process.pid} ACCOUNT:${account.username} ACQUIRING TOKEN...`);
-		// 	const result = await cachedPca.pca.acquireTokenSilent({ account, scopes: scopesToSend, redirectUri });
-		// 	console.log(`MYPREFIX PID:${process.pid} ACCOUNT:${account.username} ACQUIRED TOKEN...`);
-		// 	return result;
-		// }));
-		// for (const result of results) {
-		// 	if (result.status === 'fulfilled') {
-		// 		sessions.push(this.toAuthenticationSession(result.value, originalScopes));
-		// 	} else {
-		// 		console.error(result.reason);
-		// 	}
-		// }
 		return sessions;
 	}
 
